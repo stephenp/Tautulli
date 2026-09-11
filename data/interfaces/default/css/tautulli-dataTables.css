@@ -379,8 +379,12 @@ table.display td {
     padding: 5px;
 }
 @supports selector(td:has(a)) {
-    /* On cells with anchors, remove the default padding and set the padding */
-    /* on the anchors themselves. */
+    /* On cells with anchors, remove the default padding and set the padding
+     * on the anchors themselves.
+     * Note that if we ever add multiple anchors to a cell, this will need
+     * to be overridden for that use case (with a custom class like 'no-pad'
+     * or similar).
+     */
     table.display td:has(a) {
         position: relative;
         padding: 0;
@@ -401,8 +405,9 @@ table.display td {
         height: 100%;
     }
 
-    /* ...but then set the z-index of spans higher than the overlay *
-    /* so the play icon, player tooltip, and poster thumbnails can be hovered */
+    /* ...but then set the z-index of spans higher than the overlay
+     * so the play icon, player tooltip, and poster thumbnails can be hovered
+     */
     table.display td:has(a) a span { position: relative; z-index: 1; }
 
     /* Bootstrap pagination within nested rows shouldn't have custom padding */
