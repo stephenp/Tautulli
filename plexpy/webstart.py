@@ -233,7 +233,12 @@ def initialize(options):
                                       'application/javascript'],
             'tools.sessions.on': True,
             'tools.sessions.name': f'tautulli_session_{hash_pms_uuid()}',
-            'tools.sessions.locking': 'early',
+            # 'early' locking holds an exclusive per-session lock for the
+            # entire duration of every request, serializing all parallel
+            # requests from the same browser (graph XHRs, poster images).
+            # The session is only ever written when the CSRF token is set;
+            # those sites call acquire_lock() explicitly.
+            'tools.sessions.locking': 'explicit',
             'tools.auth.on': plexpy.AUTH_ENABLED,
             'tools.auth_basic.on': basic_auth_enabled,
             'tools.auth_basic.realm': 'Tautulli web server',
@@ -381,5 +386,6 @@ def proxy():
 def set_security_headers():
     headers = cherrypy.response.headers
     headers['X-Content-Type-Options'] = 'nosniff'
-    headers['X-Frame-Options'] = 'SAMEORIGIN'
     headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    if plexpy.CONFIG.X_FRAME_OPTIONS not in ('', '*'):
+        headers['X-Frame-Options'] = plexpy.CONFIG.X_FRAME_OPTIONS

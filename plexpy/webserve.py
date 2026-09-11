@@ -24,6 +24,7 @@ import json
 import linecache
 import os
 import shutil
+import sqlite3
 import ssl as _ssl
 import sys
 import tempfile
@@ -101,6 +102,8 @@ def serve_template(template_name, **kwargs):
 
     _session = get_session_info()
     _csrf_token = get_session_csrf_token()
+
+    cherrypy.response.headers['Cache-Control'] = "max-age=0,no-cache,no-store"
 
     try:
         template = TEMPLATE_LOOKUP.get_template(template_name)
@@ -182,7 +185,8 @@ class WebInterface(object):
             "pms_port": plexpy.CONFIG.PMS_PORT,
             "pms_ssl": plexpy.CONFIG.PMS_SSL,
             "pms_name": helpers.pms_name(),
-            "logging_ignore_interval": plexpy.CONFIG.LOGGING_IGNORE_INTERVAL
+            "logging_ignore_interval": plexpy.CONFIG.LOGGING_IGNORE_INTERVAL,
+            "system_analytics": plexpy.CONFIG.SYSTEM_ANALYTICS,
         }
 
         # The setup wizard just refreshes the page on submit so we must redirect to home if config set.
@@ -1968,6 +1972,14 @@ class WebInterface(object):
                      }
             ```
         """
+        if user_id and not allow_session_user(user_id):
+            return {'recordsFiltered': 0,
+                    'recordsTotal': 0,
+                    'data': [],
+                    'draw': 0,
+                    'filter_duration': '0',
+                    'total_duration': '0'}
+
         # Check if datatables json_data was received.
         # If not, then build the minimal amount of json data for a query
         if not kwargs.get('json_data'):
@@ -2907,13 +2919,15 @@ class WebInterface(object):
 
             Returns:
                 json:
-                    [["May 08, 2016 09:35:37",
-                      "DEBUG",
-                      "Auth: Came in with a super-token, authorization succeeded."
-                      ],
-                     [...],
-                     [...]
-                     ]
+                    {"data":
+                        [["May 08, 2016 09:35:37",
+                          "DEBUG",
+                          "Auth: Came in with a super-token, authorization succeeded."
+                          ],
+                          [...],
+                          [...]
+                        ]
+                    }
             ```
         """
         if not plexpy.CONFIG.PMS_LOGS_FOLDER:
@@ -2926,7 +2940,7 @@ class WebInterface(object):
         logs = log_reader.get_log_tail(window=window, parsed=True, log_file=logfile)
 
         if logs:
-            return logs
+            return {'data': logs}
         else:
             logger.warn("Unable to retrieve Plex log file '%s'." % logfile)
             return {'result': 'error', 'message': "Plex log file '%s.log' not found." % logfile}
@@ -3259,14 +3273,13 @@ class WebInterface(object):
             first_run = True
             server_changed = True
 
-        if not first_run:
-            for checked_config in config.CHECKED_SETTINGS:
-                checked_config = checked_config.lower()
-                if checked_config not in kwargs:
-                    # checked items should be zero or one. if they were not sent then the item was not checked
-                    kwargs[checked_config] = 0
-                else:
-                    kwargs[checked_config] = 1
+        for checked_config in config.CHECKED_SETTINGS:
+            checked_config = checked_config.lower()
+            if checked_config not in kwargs:
+                # checked items should be zero or one. if they were not sent then the item was not checked
+                kwargs[checked_config] = 0
+            else:
+                kwargs[checked_config] = 1
 
         # If http password exists in config, do not overwrite when blank value received
         if kwargs.get('http_password') == '    ':
@@ -3351,6 +3364,10 @@ class WebInterface(object):
 
         # Write the config
         plexpy.CONFIG.write()
+
+        # Send first run install analytics event
+        if first_run:
+            plexpy.run_analytics(first_run=True)
 
         # Enable or disable system startup
         if startup_changed:
@@ -4830,7 +4847,7 @@ class WebInterface(object):
             else:
                 img = '/library/metadata/{}/thumb'.format(rating_key)
 
-        if img and not img.startswith('http'):
+        if img and not img.lower().startswith('http'):
             parts = 5
             if img.startswith('/playlists'):
                 parts -= 1
@@ -4845,7 +4862,7 @@ class WebInterface(object):
         img_hash = notification_handler.set_hash_image_info(
             img=img, rating_key=rating_key, width=width, height=height,
             opacity=opacity, background=background, blur=blur, fallback=fallback,
-            add_to_db=(return_hash and not img.startswith('http'))
+            add_to_db=(return_hash and not img.lower().startswith('http'))
         )
 
         if return_hash:
@@ -4972,30 +4989,45 @@ class WebInterface(object):
         """ Download the Tautulli database file. """
         database_file = database.FILENAME
 
+        # Write the copy to the data directory rather than the system temp
+        # directory. The copy is as large as the database, and the system
+        # temp directory is a tmpfs on some systems and a private per-unit
+        # mount on others. The data directory is checked for writability
+        # at startup and stores the original database.
+        with tempfile.NamedTemporaryFile(delete=False, dir=plexpy.DATA_DIR,
+                                         suffix=f".{database_file}") as temp:
+            temp_path = temp.name
+
         try:
             db = database.MonitorDatabase()
-            db.connection.execute('begin immediate')
-
-            with tempfile.NamedTemporaryFile(delete=False, mode='w+b', suffix=f".{database_file}") as temp:
-                with open(plexpy.DB_FILE, 'rb') as f:
-                    temp.write(f.read())
-                    temp_path = temp.name
-
-            db.connection.rollback()
-        except:
-            pass
-
-        # Remove tokens
-        try:
-            db = database.MonitorDatabase(temp_path)
-            db.action('UPDATE users SET user_token = NULL, server_token = NULL')
-            db.action('UPDATE user_login SET jwt_token = NULL')
-        except:
-            logger.error('Failed to remove tokens from downloaded database.')
+            # Use a plain short-lived sqlite3 connection for the copy: the
+            # thread-local MonitorDatabase cache would otherwise hold a
+            # connection to this one-off temp file for the life of the
+            # worker thread.
+            temp_db = sqlite3.connect(temp_path, timeout=20)
+            try:
+                # Copy with the SQLite backup API, the same way make_backup()
+                # does. It copies page by page rather than holding the file
+                # in memory, and it includes the WAL contents, which a copy
+                # of the main database file alone leaves behind.
+                db.connection.backup(temp_db)
+                # Remove tokens
+                temp_db.execute('UPDATE users SET user_token = NULL, server_token = NULL')
+                temp_db.execute('UPDATE user_login SET jwt_token = NULL')
+                temp_db.commit()
+            finally:
+                temp_db.close()
+        except Exception as e:
+            logger.error("Tautulli WebInterface :: Failed to export database: %s", e)
+            helpers.delete_file(temp_path)
             cherrypy.response.status = 500
             cherrypy.response.headers['Content-Type'] = 'application/json;charset=UTF-8'
             return {'result': 'error', 'message': 'Error downloading database. Check the logs.'}
 
+        # When cherrypy has tools.sessions.on: True, the body is not streamed.
+        # Explicitly set the response to stream so that the file is streamed to the client.
+        cherrypy.response.stream = True
+        cherrypy.request.hooks.attach('on_end_request', helpers.delete_file, file_path=temp_path)
         return serve_download(temp_path, name=database_file)
 
     @cherrypy.expose

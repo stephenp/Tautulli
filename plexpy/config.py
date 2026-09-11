@@ -182,6 +182,7 @@ _CONFIG_DEFINITIONS = {
     'REFRESH_LIBRARIES_ON_STARTUP': (int, 'Monitoring', 1),
     'REFRESH_USERS_INTERVAL': (int, 'Monitoring', 12),
     'REFRESH_USERS_ON_STARTUP': (int, 'Monitoring', 1),
+    'REMOTE_APP_PUSH_URL': (str, 'Advanced', 'https://relay.tautulliremote.com'),
     'SESSION_DB_WRITE_ATTEMPTS': (int, 'Advanced', 5),
     'SHOW_ADVANCED_SETTINGS': (int, 'General', 0),
     'SYNCHRONOUS_MODE': (str, 'Advanced', 'NORMAL'),
@@ -191,7 +192,6 @@ _CONFIG_DEFINITIONS = {
     'TV_WATCHED_PERCENT': (int, 'Monitoring', 85),
     'UPDATE_DB_INTERVAL': (int, 'General', 24),
     'UPDATE_SHOW_CHANGELOG': (int, 'General', 1),
-    'UPGRADE_FLAG': (int, 'Advanced', 0),
     'VERBOSE_LOGS': (int, 'Advanced', 1),
     'VERIFY_SSL_CERT': (bool_int, 'Advanced', 1),
     'WATCHED_MARKER': (int, 'Monitoring', 3),
@@ -203,6 +203,7 @@ _CONFIG_DEFINITIONS = {
     'JWT_UPDATE_SECRET': (bool_int, 'Advanced', 0),
     'SYSTEM_ANALYTICS': (int, 'Advanced', 1),
     'SYS_TRAY_ICON': (int, 'General', 1),
+    'X_FRAME_OPTIONS': (str, 'Advanced', 'SAMEORIGIN'),
 }
 
 _BLACKLIST_KEYS = ['_APITOKEN', '_TOKEN', '_KEY', '_SECRET', '_PASSWORD', '_APIKEY', '_ID', '_HOOK']
@@ -294,7 +295,8 @@ SETTINGS = [
     'SHOW_ADVANCED_SETTINGS',
     'TIME_FORMAT',
     'TV_WATCHED_PERCENT',
-    'WATCHED_MARKER'
+    'WATCHED_MARKER',
+    'X_FRAME_OPTIONS',
 ]
 
 CHECKED_SETTINGS = [
@@ -334,6 +336,7 @@ CHECKED_SETTINGS = [
     'THEMOVIEDB_LOOKUP',
     'TVMAZE_LOOKUP',
     'WEEK_START_MONDAY',
+    'SYSTEM_ANALYTICS',
 ]
 
 
@@ -689,12 +692,13 @@ class Config(object):
 
         if self.CONFIG_VERSION == 17:
             home_stats_cards = self.HOME_STATS_CARDS
-            if 'top_users' in home_stats_cards:
-                top_users_index = home_stats_cards.index('top_users')
-                home_stats_cards.insert(top_users_index, 'top_libraries')
-            else:
-                home_stats_cards.append('top_libraries')
-            self.HOME_STATS_CARDS = home_stats_cards
+            if 'top_libraries' not in home_stats_cards:
+                if 'top_users' in home_stats_cards:
+                    top_users_index = home_stats_cards.index('top_users')
+                    home_stats_cards.insert(top_users_index, 'top_libraries')
+                else:
+                    home_stats_cards.append('top_libraries')
+                self.HOME_STATS_CARDS = home_stats_cards
 
             self.CONFIG_VERSION = 18
 

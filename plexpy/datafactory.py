@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 # This file is part of Tautulli.
 #
@@ -55,21 +55,20 @@ class DataFactory(object):
         if include_activity is None:
             include_activity = plexpy.CONFIG.HISTORY_TABLE_ACTIVITY
 
+        # The sessions table has no reference_id, so a draw filtered by
+        # group key holds no live session. Drop the union rather than
+        # filter a table on a column it does not have. This is the child
+        # table of an expanded history row.
+        if any(c[0].startswith('session_history.reference_id') for c in custom_where):
+            include_activity = False
+
+        # A guest session may only ever read its own rows. Append the
+        # session user as its own ANDed clause. Merging it into a caller's
+        # user_id clause turned the filter into user_id IN (asked, session),
+        # which widened the result to the asked-for user instead of
+        # narrowing it to the session user.
         if session.get_session_user_id():
-            session_user_id = str(session.get_session_user_id())
-            added = False
-
-            for c_where in custom_where:
-                if 'user_id' in c_where[0]:
-                    if isinstance(c_where[1], list) and session_user_id not in c_where[1]:
-                        c_where[1].append(session_user_id)
-                    elif isinstance(c_where[1], str) and c_where[1] != session_user_id:
-                        c_where[1] = [c_where[1], session_user_id]
-                    added = True
-                    break
-
-            if not added:
-                custom_where.append(['session_history.user_id', [session.get_session_user_id()]])
+            custom_where.append(['session_history.user_id', [session.get_session_user_id()]])
 
         group_by = ['session_history.reference_id'] if grouping else ['session_history.id']
 
@@ -198,6 +197,45 @@ class DataFactory(object):
             table_name_union = None
             custom_where_union = group_by_union = columns_union = []
 
+        # Cheap filtered count for draws without a search filter: the 1:1
+        # joins cannot change the group count, so count the group keys on
+        # the base tables directly instead of materializing the joined,
+        # grouped result a second time. Joins are added back only for
+        # filters that reference the side tables (same pattern as
+        # get_total_duration).
+        media_type_live_case = ("(CASE WHEN session_history_metadata.live = 1 "
+                                "THEN 'live' ELSE session_history.media_type END)")
+        count_join_tables = set()
+        count_alias = ''
+        for c_where in custom_where:
+            if 'session_history_metadata.' in c_where[0]:
+                count_join_tables.add('session_history_metadata')
+            elif 'session_history_media_info.' in c_where[0]:
+                count_join_tables.add('session_history_media_info')
+            elif c_where[0].startswith('media_type_live'):
+                count_join_tables.add('session_history_metadata')
+                count_alias = ', %s AS media_type_live' % media_type_live_case
+        count_joins = ''.join('JOIN %s ON %s.id = session_history.id ' % (t, t)
+                              for t in count_join_tables)
+        count_where, count_args = datatables.build_custom_where(
+            [[c[0], c[1]] for c in custom_where])
+
+        history_count = ("SELECT c FROM (SELECT COUNT(DISTINCT %s) AS c%s "
+                         "FROM session_history %s%s)"
+                         % (group_by[0], count_alias, count_joins, count_where))
+
+        if include_activity:
+            sessions_alias = ", (CASE WHEN live = 1 THEN 'live' ELSE media_type END) AS media_type_live"
+            sessions_where, sessions_args = datatables.build_custom_where(
+                [[c[0].split('.')[-1], c[1]] for c in custom_where])
+            sessions_count = ("SELECT c FROM (SELECT COUNT(DISTINCT session_key) AS c%s "
+                              "FROM sessions %s)" % (sessions_alias, sessions_where))
+            filtered_count_query = 'SELECT (%s) + (%s) AS filtered_count' % (history_count, sessions_count)
+            filtered_count_args = count_args + sessions_args
+        else:
+            filtered_count_query = 'SELECT (%s) AS filtered_count' % history_count
+            filtered_count_args = count_args
+
         try:
             query = data_tables.ssp_query(table_name='session_history',
                                           table_name_union=table_name_union,
@@ -216,6 +254,8 @@ class DataFactory(object):
                                           join_evals=[['session_history.user_id', 'users.user_id'],
                                                       ['session_history.id', 'session_history_metadata.id'],
                                                       ['session_history.id', 'session_history_media_info.id']],
+                                          filtered_count_query=filtered_count_query,
+                                          filtered_count_args=filtered_count_args,
                                           kwargs=kwargs)
         except Exception as e:
             logger.warn("Tautulli DataFactory :: Unable to execute database query for get_history: %s." % e)
@@ -258,7 +298,8 @@ class DataFactory(object):
             if item['live']:
                 item['percent_complete'] = 100
 
-            base_watched_value = watched_percent[item['media_type']] / 4.0
+            # A sessions row written by an older version can have no media_type
+            base_watched_value = watched_percent.get(item['media_type'], 0) / 4.0
 
             if item['live'] or helpers.check_watched(
                 item['media_type'], item['view_offset'], item['duration'],
@@ -1482,7 +1523,8 @@ class DataFactory(object):
                 pre_tautulli = 1
 
             stream_output = {'bitrate': item['bitrate'],
-                             'video_full_resolution': item['video_full_resolution'],
+                             'video_full_resolution': common.VIDEO_RESOLUTION_OVERRIDES.get(
+                                 item['video_full_resolution'], item['video_full_resolution']),
                              'optimized_version': item['optimized_version'],
                              'optimized_version_profile': item['optimized_version_profile'],
                              'optimized_version_title': item['optimized_version_title'],
@@ -1505,7 +1547,8 @@ class DataFactory(object):
                              'subtitle_forced': item['subtitle_forced'],
                              'subtitle_language': item['subtitle_language'],
                              'stream_bitrate': item['stream_bitrate'],
-                             'stream_video_full_resolution': item['stream_video_full_resolution'],
+                             'stream_video_full_resolution': common.VIDEO_RESOLUTION_OVERRIDES.get(
+                                 item['stream_video_full_resolution'], item['stream_video_full_resolution']),
                              'quality_profile': item['quality_profile'],
                              'stream_container_decision': item['stream_container_decision'],
                              'stream_container': item['stream_container'],
@@ -1602,7 +1645,8 @@ class DataFactory(object):
                            'bitrate': item['bitrate'],
                            'video_codec': item['video_codec'],
                            'video_resolution': item['video_resolution'],
-                           'video_full_resolution': item['video_full_resolution'],
+                           'video_full_resolution': common.VIDEO_RESOLUTION_OVERRIDES.get(
+                               item['video_full_resolution'], item['video_full_resolution']),
                            'video_framerate': item['video_framerate'],
                            'audio_codec': item['audio_codec'],
                            'audio_channels': item['audio_channels'],
@@ -2427,7 +2471,7 @@ class DataFactory(object):
     def get_user_devices(self, user_id='', history_only=True):
         monitor_db = database.MonitorDatabase()
 
-        if user_id:
+        if user_id is not None and user_id != '':
             if history_only:
                 query = "SELECT machine_id FROM session_history " \
                         "WHERE user_id = ? " \

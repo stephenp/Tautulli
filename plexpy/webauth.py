@@ -331,6 +331,10 @@ class AuthController(object):
 
     def get_loginform(self, redirect_uri=''):
         from plexpy.webserve import serve_template
+        # The lock is released once at request end; never double-acquire
+        # (serve_template's CSRF helper also acquires)
+        if not cherrypy.session.locked:
+            cherrypy.session.acquire_lock()
         cherrypy.session['_csrf_token'] = generate_csrf_token()
         return serve_template(template_name="login.html", title="Login", redirect_uri=unquote(redirect_uri))
 
@@ -420,6 +424,8 @@ class AuthController(object):
             cherrypy.response.cookie[jwt_cookie]['httponly'] = True
             cherrypy.response.cookie[jwt_cookie]['samesite'] = 'lax'
 
+            if not cherrypy.session.locked:
+                cherrypy.session.acquire_lock()
             cherrypy.session['_csrf_token'] = generate_csrf_token()
             cherrypy.request.login = payload
             cherrypy.response.status = 200

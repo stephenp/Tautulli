@@ -360,6 +360,22 @@
                         </div>
                         % endif
 
+                        <div class="padded-header advanced-setting">
+                            <h3>System Analytics</h3>
+                        </div>
+
+                        <div class="checkbox advanced-setting">
+                            <label>
+                                <input type="checkbox" id="system_analytics" name="system_analytics" value="1" ${config['system_analytics']}> Send Anonymous System Analytics
+                            </label>
+                            <p class="help-block">Enable anonymous system analytics to help improve Tautulli. No personal information is collected. Refer to the
+                                <a href="${anon_url('https://github.com/%s/%s/wiki/Frequently-Asked-Questions#general-q21' % (plexpy.CONFIG.GIT_USER, plexpy.CONFIG.GIT_REPO))}" target="_blank" rel="noreferrer">
+                                    FAQ
+                                </a>
+                                to see what data is being collected. You can disable this at any time.
+                            </p>
+                        </div>
+
                         <p><input type="button" class="btn btn-bright save-button" value="Save" data-success="Changes saved successfully"></p>
 
                     </div>
@@ -598,6 +614,19 @@
                                 <input type="checkbox" class="http-settings" name="http_proxy" id="http_proxy" value="1" ${config['http_proxy']}> Enable HTTP Proxy
                             </label>
                             <p class="help-block">Respect the X-Forwarded-Proto header. Used for reverse proxies with SSL.</p>
+                        </div>
+                        <div class="form-group advanced-setting">
+                            <label for="x_frame_options">Allow Frame Option</label>
+                            <div class="row">
+                                <div class="col-md-4">
+                                    <select class="form-control" id="x_frame_options" name="x_frame_options">
+                                        <option value="SAMEORIGIN" ${'selected' if config['x_frame_options'] == 'SAMEORIGIN' else ''}>SAMEORIGIN (Default)</option>
+                                        <option value="DENY" ${'selected' if config['x_frame_options'] == 'DENY' else ''}>DENY</option>
+                                        <option value="*" ${'selected' if config['x_frame_options'] == 'ALLOWALL' else ''}>ALLOWALL</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <p class="help-block">Sets the X-Frame-Options header to control whether the browser should allow Tautulli to be displayed inside a frame.</p>
                         </div>
                         <div class="checkbox advanced-setting">
                             <label>
@@ -2091,7 +2120,7 @@ Rating: {rating}/10   --> Rating: /10
                     or manually enter the connection info and device token into the app settings. This window will automatically close once device registration is successful.
                 </p>
                 <p class="help-block">
-                    Note: OneSignal.com must not be blocked (e.g. in Pi-hole) for device registration.
+                    Note: Tautulli must be able to reach relay.tautulliremote.com (e.g. not blocked in Pi-hole) to validate the device and deliver notifications.
                 </p>
                 <label>QR Code</label>
                 <div id="api_qr_code"></div>
